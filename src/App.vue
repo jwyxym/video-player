@@ -1,17 +1,27 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import Player from './player.vue';
-
-type WebkitFullscreenDocument = Document & { webkitFullscreenElement?: Element | null };
+import Player, { lockLandscape, unlockOrientation } from './index';
 
 const showDownload = ref(true);
 const fullscreenEvent = ref('尚未触发全屏事件');
 const downloadEvent = ref('尚未点击下载按钮');
+const orientationStatus = ref('进入全屏后尝试锁定横屏');
+let orientationRequest = 0;
 const videoUrl = 'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4';
 
-function onFullscreenChange(event: Event) {
-	const fullscreenDocument = document as WebkitFullscreenDocument;
-	fullscreenEvent.value = `${event.type}：${fullscreenDocument.fullscreenElement || fullscreenDocument.webkitFullscreenElement ? '已进入全屏' : '已退出全屏'}`;
+async function onEnterFullscreen() {
+	fullscreenEvent.value = '已进入全屏';
+	const request = ++orientationRequest;
+	const locked = await lockLandscape();
+	if (request !== orientationRequest) return;
+	orientationStatus.value = locked ? '已锁定横屏' : '浏览器未允许锁定横屏，可手动旋转设备';
+}
+
+function onExitFullscreen() {
+	++orientationRequest;
+	fullscreenEvent.value = '已退出全屏';
+	const unlocked = unlockOrientation();
+	orientationStatus.value = unlocked ? '已解除方向锁定' : '浏览器不支持或未允许解除方向锁定';
 }
 
 function onDownload() {
@@ -35,8 +45,8 @@ function onDownload() {
 				:playback-rates="[0.5, 1, 1.5, 2, 3, 4, 5]"
 				loop
 				@download="onDownload"
-				@fullscreenchange="onFullscreenChange"
-				@webkitfullscreenchange="onFullscreenChange"
+				@enter-fullscreen="onEnterFullscreen"
+				@exit-fullscreen="onExitFullscreen"
 			/>
 
 			<div class="demo__options">
@@ -44,7 +54,7 @@ function onDownload() {
 					<input v-model="showDownload" type="checkbox" />
 					<span>显示下载按钮</span>
 				</label>
-				<div class="demo__events"><p class="demo__event">{{ fullscreenEvent }}</p><p class="demo__event">{{ downloadEvent }}</p></div>
+				<div class="demo__events"><p class="demo__event">{{ fullscreenEvent }}</p><p class="demo__event">{{ orientationStatus }}</p><p class="demo__event">{{ downloadEvent }}</p></div>
 			</div>
 
 			<pre class="demo__code">&lt;Player
@@ -53,8 +63,8 @@ function onDownload() {
   :controls-hide-delay="3000"
   :playback-rates="[0.5, 1, 1.5, 2, 3, 4, 5]"
   @download="onDownload"
-  @fullscreenchange="onFullscreenChange"
-  @webkitfullscreenchange="onFullscreenChange"
+  @enter-fullscreen="onEnterFullscreen"
+  @exit-fullscreen="onExitFullscreen"
 /&gt;</pre>
 		</section>
 	</main>

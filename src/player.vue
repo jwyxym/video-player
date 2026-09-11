@@ -1,5 +1,5 @@
 <template>
-	<div ref="player" class="player" :class="{ 'is-playing': isPlaying, 'is-fullscreen': isFullscreen, 'controls-visible': controlsVisible }" @pointermove="onPointerMove" @fullscreenchange="onFullscreenChange" @webkitfullscreenchange="onWebkitFullscreenChange">
+	<div ref="player" class="player" :class="{ 'is-playing': isPlaying, 'is-fullscreen': isFullscreen, 'controls-visible': controlsVisible }" @pointermove="onPointerMove" @fullscreenchange="onFullscreenChange" @webkitfullscreenchange="onFullscreenChange">
 		<video ref="video" class="player__video" :loop="props.loop" playsinline preload="metadata" @play="isPlaying = true" @pause="isPlaying = false" @loadedmetadata="syncDuration" @durationchange="syncDuration" @progress="syncDuration" @timeupdate="syncProgress" @seeked="syncProgress" @pointerdown="startSwipe" @pointermove="moveSwipe" @pointerup="endSwipe" @pointercancel="cancelSwipe" @lostpointercapture="cancelSwipe" @click="onVideoClick" @dblclick.prevent />
 		<div v-if="isScrubbing" class="player__seek-preview"><div>{{ formatSeekDelta(seekDelta) }}</div><div>{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</div></div>
 
@@ -44,8 +44,8 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
 	(e: 'download', event: MouseEvent): void;
-	(e: 'fullscreenchange', event: Event): void;
-	(e: 'webkitfullscreenchange', event: Event): void;
+	(e: 'enter-fullscreen', event: Event): void;
+	(e: 'exit-fullscreen', event: Event): void;
 }>();
 
 const video = ref<HTMLVideoElement | null>(null);
@@ -273,19 +273,16 @@ function formatTime(seconds: number) {
 	if (!Number.isFinite(seconds)) return '0:00';
 	return `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
 }
-function syncFullscreen() {
+function onFullscreenChange(event: Event) {
 	const fullscreenDocument = document as WebkitFullscreenDocument;
-	isFullscreen.value = (fullscreenDocument.fullscreenElement || fullscreenDocument.webkitFullscreenElement) === player.value;
+	const element = fullscreenDocument.fullscreenElement || fullscreenDocument.webkitFullscreenElement;
+	const active = Boolean(player.value && element === player.value);
+	if (active === isFullscreen.value) return;
+	isFullscreen.value = active;
 	if (!isFullscreen.value) cancelSwipe();
 	restartControlsTimer();
-}
-function onFullscreenChange(event: Event) {
-	syncFullscreen();
-	emit('fullscreenchange', event);
-}
-function onWebkitFullscreenChange(event: Event) {
-	syncFullscreen();
-	emit('webkitfullscreenchange', event);
+	if (active) emit('enter-fullscreen', event);
+	else emit('exit-fullscreen', event);
 }
 async function toggleFullscreen() {
 	const element = player.value as (HTMLDivElement & { webkitRequestFullscreen?: () => Promise<void> | void }) | null;
