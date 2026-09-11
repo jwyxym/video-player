@@ -31,7 +31,9 @@ function onDownload() {
 			<Player
 				:src="videoUrl"
 				:download="showDownload"
+				:controls-hide-delay="3000"
 				:playback-rates="[0.5, 1, 1.5, 2, 3, 4, 5]"
+				loop
 				@download="onDownload"
 				@fullscreenchange="onFullscreenChange"
 				@webkitfullscreenchange="onFullscreenChange"
@@ -48,6 +50,7 @@ function onDownload() {
 			<pre class="demo__code">&lt;Player
   :src="videoUrl"
   :download="true"
+  :controls-hide-delay="3000"
   :playback-rates="[0.5, 1, 1.5, 2, 3, 4, 5]"
   @download="onDownload"
   @fullscreenchange="onFullscreenChange"

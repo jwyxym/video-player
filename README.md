@@ -24,6 +24,8 @@ function onDownload() {
   <VideoPlayer
     src="https://example.com/video.m3u8"
     :download="true"
+    :loop="true"
+    :controls-hide-delay="3000"
     :playback-rates="[0.5, 1, 1.5, 2, 3, 4, 5]"
     @download="onDownload"
   />
