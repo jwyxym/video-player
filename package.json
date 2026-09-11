@@ -1,6 +1,6 @@
 {
   "name": "@jwyxym/video-player",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "A Vue 3 video player with HLS, configurable playback rates, and custom controls.",
   "type": "module",
   "scripts": {

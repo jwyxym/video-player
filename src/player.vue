@@ -1,11 +1,12 @@
 <template>
 	<div ref="player" class="player" :class="{ 'is-playing': isPlaying, 'is-fullscreen': isFullscreen, 'controls-visible': controlsVisible }" @pointermove="onPointerMove" @fullscreenchange="onFullscreenChange" @webkitfullscreenchange="onWebkitFullscreenChange">
-		<video ref="video" class="player__video" :loop="props.loop" playsinline preload="metadata" @play="isPlaying = true" @pause="isPlaying = false" @loadedmetadata="syncDuration" @durationchange="syncDuration" @progress="syncDuration" @timeupdate="syncProgress" @seeked="syncProgress" @click="onVideoClick" @dblclick.prevent />
+		<video ref="video" class="player__video" :loop="props.loop" playsinline preload="metadata" @play="isPlaying = true" @pause="isPlaying = false" @loadedmetadata="syncDuration" @durationchange="syncDuration" @progress="syncDuration" @timeupdate="syncProgress" @seeked="syncProgress" @pointerdown="startSwipe" @pointermove="moveSwipe" @pointerup="endSwipe" @pointercancel="cancelSwipe" @lostpointercapture="cancelSwipe" @click="onVideoClick" @dblclick.prevent />
+		<div v-if="isScrubbing" class="player__seek-preview"><div>{{ formatSeekDelta(seekDelta) }}</div><div>{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</div></div>
 
 		<div class="player__controls" aria-label="Video controls" :aria-hidden="!controlsVisible" @pointerdown="onControlsPointerDown" @click="restartControlsTimer" @input="restartControlsTimer" @change="restartControlsTimer" @keydown="restartControlsTimer">
 			<button class="control-button control-button--primary" type="button" :aria-label="isPlaying ? 'Pause' : 'Play'" @click="togglePlayback"><span v-if="isPlaying">&#10074;&#10074;</span><span v-else>&#9654;</span></button>
 			<span class="player__time">{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
-			<input class="player__progress" type="range" min="0" :max="duration || 0" :disabled="duration <= 0" step="0.1" :value="currentTime" aria-label="Playback progress" @input="previewSeek" @change="commitSeek" />
+			<input class="player__progress" type="range" min="0" :max="duration || 0" :disabled="duration <= 0" step="0.1" :value="currentTime" aria-label="Playback progress" @pointerdown="startProgressSeek" @input="previewSeek" @change="commitSeek" />
 			<button class="control-button" type="button" :aria-label="isMuted ? 'Unmute' : 'Mute'" @click="toggleMute"><span v-if="isMuted">&#128263;</span><span v-else>&#128266;</span></button>
 			<label class="sr-only" for="player-volume">Volume</label>
 			<input id="player-volume" class="player__volume" type="range" min="0" max="1" step="0.05" :value="volume" @input="setVolume" />
@@ -55,7 +56,9 @@ const isMuted = ref(false);
 const volume = ref(1);
 const currentTime = ref(0);
 const duration = ref(0);
-let isScrubbing = false;
+const isScrubbing = ref(false);
+const seekStartTime = ref(0);
+const seekDelta = computed(() => Math.round(currentTime.value - seekStartTime.value));
 const playbackRate = ref(1);
 const validPlaybackRates = computed(() => {
 	const rates = props.playbackRates.filter(rate => Number.isFinite(rate) && rate > 0);
@@ -67,6 +70,60 @@ let controlsTimer: ReturnType<typeof setTimeout> | undefined;
 let singleClickTimer: ReturnType<typeof setTimeout> | undefined;
 let lastClick: { time: number; x: number; y: number } | undefined;
 let controlsPressed = false;
+const swiping = ref(false);
+let swipe: { id: number; x: number; y: number; time: number; width: number; span: number } | undefined;
+let suppressVideoClick = false;
+
+function startSwipe(event: PointerEvent) {
+	if (swipe) return;
+	suppressVideoClick = false;
+	if (event.pointerType === 'mouse' || !event.isPrimary || !video.value) return;
+	syncDuration();
+	if (duration.value <= 0) return;
+	swipe = { id: event.pointerId, x: event.clientX, y: event.clientY, time: video.value.currentTime,
+		width: Math.max(1, video.value.getBoundingClientRect().width), span: Math.min(duration.value, 120) };
+	video.value.setPointerCapture(event.pointerId);
+	clearControlsTimer();
+}
+function moveSwipe(event: PointerEvent) {
+	if (!swipe || event.pointerId !== swipe.id) return;
+	const dx = event.clientX - swipe.x;
+	const dy = event.clientY - swipe.y;
+	if (!swiping.value) {
+		if (Math.max(Math.abs(dx), Math.abs(dy)) < 12) return;
+		suppressVideoClick = true;
+		clearTimeout(singleClickTimer);
+		lastClick = undefined;
+		if (Math.abs(dy) >= Math.abs(dx)) { cancelSwipe(); return; }
+		swiping.value = true;
+		seekStartTime.value = swipe.time;
+		isScrubbing.value = true;
+		controlsVisible.value = true;
+	}
+	event.preventDefault();
+	currentTime.value = Math.max(0, Math.min(duration.value, swipe.time + dx / swipe.width * swipe.span));
+}
+function finishSwipe(commit: boolean) {
+	if (!swipe) return;
+	const id = swipe.id;
+	swipe = undefined;
+	if (swiping.value) {
+		if (commit) commitSeek();
+		else { isScrubbing.value = false; syncProgress(); }
+	}
+	swiping.value = false;
+	if (video.value?.hasPointerCapture(id)) video.value.releasePointerCapture(id);
+	restartControlsTimer();
+}
+function endSwipe(event: PointerEvent) {
+	if (event.pointerId !== swipe?.id) return;
+	moveSwipe(event);
+	finishSwipe(true);
+}
+function cancelSwipe(event?: PointerEvent) {
+	if (event && event.pointerId !== swipe?.id) return;
+	finishSwipe(false);
+}
 
 function clearControlsTimer() {
 	clearTimeout(controlsTimer);
@@ -78,7 +135,7 @@ function restartControlsTimer() {
 		controlsVisible.value = true;
 		return;
 	}
-	if (!controlsVisible.value || controlsPressed || !Number.isFinite(props.controlsHideDelay) || props.controlsHideDelay <= 0) return;
+	if (!controlsVisible.value || controlsPressed || swipe || !Number.isFinite(props.controlsHideDelay) || props.controlsHideDelay <= 0) return;
 	controlsTimer = setTimeout(() => {
 		controlsVisible.value = false;
 	}, props.controlsHideDelay);
@@ -92,6 +149,7 @@ function toggleControls() {
 	restartControlsTimer();
 }
 function onVideoClick(event: MouseEvent) {
+	if (suppressVideoClick) { suppressVideoClick = false; return; }
 	const now = performance.now();
 	const isDoubleClick = lastClick && now - lastClick.time < 300
 		&& Math.hypot(event.clientX - lastClick.x, event.clientY - lastClick.y) < 40;
@@ -127,7 +185,8 @@ function onControlsPointerUp() {
 
 function loadSource() {
 	if (!video.value) return;
-	isScrubbing = false;
+	cancelSwipe();
+	isScrubbing.value = false;
 	currentTime.value = 0;
 	duration.value = 0;
 	hls?.destroy();
@@ -156,17 +215,23 @@ function setVolume(event: Event) {
 	video.value.muted = volume.value === 0;
 	isMuted.value = video.value.muted;
 }
+function startProgressSeek() {
+	if (!video.value || duration.value <= 0) return;
+	seekStartTime.value = video.value.currentTime;
+	currentTime.value = seekStartTime.value;
+	isScrubbing.value = true;
+}
 function previewSeek(event: Event) {
 	const value = Number((event.target as HTMLInputElement).value);
 	if (!Number.isFinite(value) || duration.value <= 0) return;
-	isScrubbing = true;
+	if (!isScrubbing.value) startProgressSeek();
 	currentTime.value = Math.max(0, Math.min(value, duration.value));
 	// Keyboard input has no pointerup; apply it immediately.
 	if (!controlsPressed) commitSeek();
 }
 function commitSeek() {
-	if (!isScrubbing || !video.value) return;
-	isScrubbing = false;
+	if (!isScrubbing.value || !video.value) return;
+	isScrubbing.value = false;
 	try {
 		video.value.currentTime = currentTime.value;
 	} catch (error) {
@@ -185,7 +250,24 @@ function syncDuration() {
 }
 function syncProgress() {
 	syncDuration();
-	if (!isScrubbing && !video.value?.seeking) currentTime.value = video.value?.currentTime ?? 0;
+	if (!isScrubbing.value && !video.value?.seeking) currentTime.value = video.value?.currentTime ?? 0;
+}
+function formatSeekDelta(seconds: number) {
+	if (!Number.isFinite(seconds)) return '+0秒';
+	const rounded = Math.round(seconds);
+	let remaining = Math.abs(rounded);
+	const units: [string, number][] = [
+		['时', 60 * 60],
+		['分', 60],
+		['秒', 1],
+	];
+	const parts: string[] = [];
+	for (const [label, size] of units) {
+		const value = Math.floor(remaining / size);
+		if (value > 0) parts.push(`${value}${label}`);
+		remaining %= size;
+	}
+	return `${rounded < 0 ? '-' : '+'}${parts.join('') || '0秒'}`;
 }
 function formatTime(seconds: number) {
 	if (!Number.isFinite(seconds)) return '0:00';
@@ -194,6 +276,7 @@ function formatTime(seconds: number) {
 function syncFullscreen() {
 	const fullscreenDocument = document as WebkitFullscreenDocument;
 	isFullscreen.value = (fullscreenDocument.fullscreenElement || fullscreenDocument.webkitFullscreenElement) === player.value;
+	if (!isFullscreen.value) cancelSwipe();
 	restartControlsTimer();
 }
 function onFullscreenChange(event: Event) {
@@ -233,6 +316,7 @@ onMounted(() => {
 	window.addEventListener('pointercancel', onControlsPointerUp);
 });
 onUnmounted(() => {
+	cancelSwipe();
 	hls?.destroy();
 	clearControlsTimer();
 	clearTimeout(singleClickTimer);
@@ -242,10 +326,12 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.player { position: relative; overflow: hidden; width: 100%; border-radius: 14px; background: #000; box-shadow: 0 16px 40px rgb(0 0 0 / 35%); color: #fff; }
-.player__video { display: block; width: 100%; max-height: 80vh; background: #000; cursor: pointer; touch-action: manipulation; }
+.player { position: relative; overflow: hidden; width: 100%; border-radius: 14px; background: #000; box-shadow: 0 16px 40px rgb(0 0 0 / 35%); color: #fff; -webkit-tap-highlight-color: transparent; }
+.player__video { display: block; width: 100%; max-height: 80vh; background: #000; cursor: pointer; touch-action: pan-y pinch-zoom; }
 .player.is-fullscreen { width: 100%; height: 100%; border-radius: 0; box-shadow: none; }
 .player.is-fullscreen .player__video { width: 100%; height: 100%; max-height: none; object-fit: contain; }
+.player.is-fullscreen .player__video { touch-action: none; }
+.player__seek-preview { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 12px 20px; border-radius: 8px; background: rgb(0 0 0 / 75%); color: #fff; font-variant-numeric: tabular-nums; pointer-events: none; text-align: center; line-height: 1.6; }
 .player.is-fullscreen .player__controls { z-index: 1; }
 .player__controls { position: absolute; right: 0; bottom: 0; left: 0; display: flex; align-items: center; gap: 10px; padding: 30px 16px 14px; background: linear-gradient(transparent, #000 55%); color: #fff; opacity: 0; transform: translateY(8px); transition: opacity .2s ease, transform .2s ease; }
 .player__controls { visibility: hidden; pointer-events: none; }
