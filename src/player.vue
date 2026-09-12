@@ -284,24 +284,52 @@ function onFullscreenChange(event: Event) {
 	if (active) emit('enter-fullscreen', event);
 	else emit('exit-fullscreen', event);
 }
-async function toggleFullscreen() {
+/** 请求当前播放器进入全屏；不支持或请求失败时返回 false。 */
+async function enterFullscreen(): Promise<boolean> {
 	const element = player.value as (HTMLDivElement & { webkitRequestFullscreen?: () => Promise<void> | void }) | null;
 	const fullscreenDocument = document as WebkitFullscreenDocument;
-	if (!element) return;
+	if (!element) return false;
+	if ((fullscreenDocument.fullscreenElement || fullscreenDocument.webkitFullscreenElement) === element) return true;
 	try {
-		if (fullscreenDocument.fullscreenElement === element) {
-			await document.exitFullscreen();
-		} else if (fullscreenDocument.webkitFullscreenElement === element) {
-			await fullscreenDocument.webkitExitFullscreen?.();
-		} else if (element.requestFullscreen) {
+		if (element.requestFullscreen) {
 			await element.requestFullscreen();
 		} else if (element.webkitRequestFullscreen) {
 			await element.webkitRequestFullscreen();
-		}
+		} else return false;
+		return true;
 	} catch (error) {
 		console.error('Fullscreen request failed:', error);
+		return false;
 	}
 }
+
+/** 仅退出当前播放器的全屏，不干预其他元素。 */
+async function exitFullscreen(): Promise<boolean> {
+	const element = player.value;
+	if (!element) return false;
+	const doc = document as WebkitFullscreenDocument;
+	try {
+		if (doc.fullscreenElement === element) {
+			await doc.exitFullscreen();
+		} else if (doc.webkitFullscreenElement === element) {
+			if (!doc.webkitExitFullscreen) return false;
+			await doc.webkitExitFullscreen();
+		}
+		return true;
+	} catch (error) {
+		console.error('Exit fullscreen failed:', error);
+		return false;
+	}
+}
+
+async function toggleFullscreen(): Promise<boolean> {
+	if (!player.value) return false;
+	const doc = document as WebkitFullscreenDocument;
+	return (doc.fullscreenElement || doc.webkitFullscreenElement) === player.value
+		? exitFullscreen() : enterFullscreen();
+}
+
+defineExpose({ enterFullscreen, exitFullscreen, toggleFullscreen });
 
 watch(playbackRate, rate => { if (video.value) video.value.playbackRate = rate; });
 watch(() => props.src, loadSource);

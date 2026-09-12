@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import Player, { lockLandscape, unlockOrientation } from './index';
 
 const showDownload = ref(true);
+const playerRef = ref<InstanceType<typeof Player> | null>(null);
 const fullscreenEvent = ref('尚未触发全屏事件');
 const downloadEvent = ref('尚未点击下载按钮');
 const orientationStatus = ref('进入全屏后尝试锁定横屏');
@@ -39,6 +40,7 @@ function onDownload() {
 			</div>
 
 			<Player
+				ref="playerRef"
 				:src="videoUrl"
 				:download="showDownload"
 				:controls-hide-delay="3000"
@@ -48,6 +50,10 @@ function onDownload() {
 				@enter-fullscreen="onEnterFullscreen"
 				@exit-fullscreen="onExitFullscreen"
 			/>
+
+			<div class="demo__actions">
+				<button type="button" @click="playerRef?.enterFullscreen()">进入全屏</button>
+			</div>
 
 			<div class="demo__options">
 				<label class="demo__switch">
@@ -71,6 +77,8 @@ function onDownload() {
 </template>
 
 <style scoped>
+.demo__actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.demo__actions button { border: 0; border-radius: 8px; padding: 10px 16px; background: #2563eb; color: #fff; cursor: pointer; }
 :global(*) { box-sizing: border-box; }
 :global(body) { min-width: 320px; margin: 0; background: #eef3ff; color: #172033; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
 .demo { min-height: 100vh; padding: 48px 20px; background: radial-gradient(circle at top right, #c7d9ff, transparent 38%), #eef3ff; }
