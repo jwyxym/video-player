@@ -1,6 +1,12 @@
 <template>
 	<div ref="player" class="player" :class="{ 'is-playing': isPlaying, 'is-fullscreen': isFullscreen, 'controls-visible': controlsVisible }" @pointermove="onPointerMove" @fullscreenchange="onFullscreenChange" @webkitfullscreenchange="onFullscreenChange">
-		<video ref="video" class="player__video" :loop="props.loop" playsinline preload="metadata" @play="isPlaying = true" @pause="isPlaying = false" @loadedmetadata="syncDuration" @durationchange="syncDuration" @progress="syncDuration" @timeupdate="syncProgress" @seeked="syncProgress" @pointerdown="startSwipe" @pointermove="moveSwipe" @pointerup="endSwipe" @pointercancel="cancelSwipe" @lostpointercapture="cancelSwipe" @click="onVideoClick" @dblclick.prevent />
+		<video ref="video" class="player__video" :loop="props.loop" playsinline preload="metadata"
+			@play="isPlaying = true; syncBuffering()" @pause="isPlaying = false; isBuffering = false"
+			@waiting="syncBuffering" @stalled="syncBuffering" @seeking="syncBuffering" @playing="isBuffering = false" @canplay="syncBuffering"
+			@ended="isPlaying = false; isBuffering = false" @error="isBuffering = false" @emptied="isBuffering = false"
+			@loadedmetadata="syncDuration" @durationchange="syncDuration" @progress="syncDuration" @timeupdate="syncProgress" @seeked="syncProgress(); syncBuffering()"
+			@pointerdown="startSwipe" @pointermove="moveSwipe" @pointerup="endSwipe" @pointercancel="cancelSwipe" @lostpointercapture="cancelSwipe" @click="onVideoClick" @dblclick.prevent />
+		<div v-if="isBuffering && !isScrubbing" class="player__buffering" role="status" aria-live="polite"><span class="player__spinner" aria-hidden="true"></span><span>缓冲中…</span></div>
 		<div v-if="isScrubbing" class="player__seek-preview"><div>{{ formatSeekDelta(seekDelta) }}</div><div>{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</div></div>
 
 		<div class="player__controls" aria-label="Video controls" :aria-hidden="!controlsVisible" @pointerdown="onControlsPointerDown" @click="restartControlsTimer" @input="restartControlsTimer" @change="restartControlsTimer" @keydown="restartControlsTimer">
@@ -52,12 +58,14 @@ const video = ref<HTMLVideoElement | null>(null);
 const player = ref<HTMLDivElement | null>(null);
 const isFullscreen = ref(false);
 const isPlaying = ref(false);
+const isBuffering = ref(false);
 const isMuted = ref(false);
 const volume = ref(1);
 const currentTime = ref(0);
 const duration = ref(0);
 const isScrubbing = ref(false);
 const seekStartTime = ref(0);
+let resumeAfterSeek = false;
 const seekDelta = computed(() => Math.round(currentTime.value - seekStartTime.value));
 const playbackRate = ref(1);
 const validPlaybackRates = computed(() => {
@@ -96,8 +104,8 @@ function moveSwipe(event: PointerEvent) {
 		lastClick = undefined;
 		if (Math.abs(dy) >= Math.abs(dx)) { cancelSwipe(); return; }
 		swiping.value = true;
-		seekStartTime.value = swipe.time;
-		isScrubbing.value = true;
+		startProgressSeek();
+		swipe.time = seekStartTime.value;
 		controlsVisible.value = true;
 	}
 	event.preventDefault();
@@ -109,7 +117,7 @@ function finishSwipe(commit: boolean) {
 	swipe = undefined;
 	if (swiping.value) {
 		if (commit) commitSeek();
-		else { isScrubbing.value = false; syncProgress(); }
+		else cancelSeek();
 	}
 	swiping.value = false;
 	if (video.value?.hasPointerCapture(id)) video.value.releasePointerCapture(id);
@@ -131,7 +139,7 @@ function clearControlsTimer() {
 }
 function restartControlsTimer() {
 	clearControlsTimer();
-	if (!isFullscreen.value) {
+	if (!isFullscreen.value && !isPlaying.value) {
 		controlsVisible.value = true;
 		return;
 	}
@@ -141,10 +149,6 @@ function restartControlsTimer() {
 	}, props.controlsHideDelay);
 }
 function toggleControls() {
-	if (!isFullscreen.value) {
-		controlsVisible.value = true;
-		return;
-	}
 	controlsVisible.value = !controlsVisible.value;
 	restartControlsTimer();
 }
@@ -185,6 +189,8 @@ function onControlsPointerUp() {
 
 function loadSource() {
 	if (!video.value) return;
+	isBuffering.value = false;
+	resumeAfterSeek = false;
 	cancelSwipe();
 	isScrubbing.value = false;
 	currentTime.value = 0;
@@ -195,7 +201,10 @@ function loadSource() {
 		hls = new Hls();
 		hls.loadSource(props.src);
 		hls.attachMedia(video.value);
-		hls.on(Hls.Events.ERROR, (_, data) => console.error('HLS error:', data));
+		hls.on(Hls.Events.ERROR, (_, data) => {
+			if (data.fatal) isBuffering.value = false;
+			console.error('HLS error:', data);
+		});
 	} else video.value.src = props.src;
 }
 function togglePlayback() {
@@ -216,10 +225,12 @@ function setVolume(event: Event) {
 	isMuted.value = video.value.muted;
 }
 function startProgressSeek() {
-	if (!video.value || duration.value <= 0) return;
+	if (isScrubbing.value || !video.value || duration.value <= 0) return;
 	seekStartTime.value = video.value.currentTime;
 	currentTime.value = seekStartTime.value;
 	isScrubbing.value = true;
+	resumeAfterSeek = !video.value.paused;
+	video.value.pause();
 }
 function previewSeek(event: Event) {
 	const value = Number((event.target as HTMLInputElement).value);
@@ -237,7 +248,24 @@ function commitSeek() {
 	} catch (error) {
 		syncProgress();
 		console.error('Seek failed:', error);
+	} finally {
+		restorePlaybackAfterSeek();
 	}
+}
+function restorePlaybackAfterSeek() {
+	const resume = resumeAfterSeek;
+	resumeAfterSeek = false;
+	if (resume && video.value) void video.value.play().catch(error => console.error('Playback failed:', error));
+}
+function cancelSeek() {
+	if (!isScrubbing.value) return;
+	isScrubbing.value = false;
+	syncProgress();
+	restorePlaybackAfterSeek();
+}
+function syncBuffering() {
+	const media = video.value;
+	isBuffering.value = Boolean(media && !media.paused && !media.ended && !media.error && media.readyState < 3);
 }
 function syncDuration() {
 	const media = video.value;
@@ -332,6 +360,7 @@ async function toggleFullscreen(): Promise<boolean> {
 defineExpose({ enterFullscreen, exitFullscreen, toggleFullscreen });
 
 watch(playbackRate, rate => { if (video.value) video.value.playbackRate = rate; });
+watch(isPlaying, restartControlsTimer);
 watch(() => props.src, loadSource);
 watch(() => props.controlsHideDelay, restartControlsTimer);
 onMounted(() => {
@@ -341,6 +370,7 @@ onMounted(() => {
 	window.addEventListener('pointercancel', onControlsPointerUp);
 });
 onUnmounted(() => {
+	resumeAfterSeek = false;
 	cancelSwipe();
 	hls?.destroy();
 	clearControlsTimer();
@@ -356,6 +386,10 @@ onUnmounted(() => {
 .player.is-fullscreen { width: 100%; height: 100%; border-radius: 0; box-shadow: none; }
 .player.is-fullscreen .player__video { width: 100%; height: 100%; max-height: none; object-fit: contain; }
 .player.is-fullscreen .player__video { touch-action: none; }
+.player__buffering { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #fff; font-size: 14px; text-shadow: 0 1px 4px #000; pointer-events: none; }
+.player__spinner { width: 36px; height: 36px; border: 3px solid rgb(255 255 255 / 35%); border-top-color: #fff; border-radius: 50%; animation: player-spin .8s linear infinite; }
+@keyframes player-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .player__spinner { animation: none; } }
 .player__seek-preview { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 12px 20px; border-radius: 8px; background: rgb(0 0 0 / 75%); color: #fff; font-variant-numeric: tabular-nums; pointer-events: none; text-align: center; line-height: 1.6; }
 .player.is-fullscreen .player__controls { z-index: 1; }
 .player__controls { position: absolute; right: 0; bottom: 0; left: 0; display: flex; align-items: center; gap: 10px; padding: 30px 16px 14px; background: linear-gradient(transparent, #000 55%); color: #fff; opacity: 0; transform: translateY(8px); transition: opacity .2s ease, transform .2s ease; }
